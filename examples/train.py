@@ -40,7 +40,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 
 from compressai.datasets import ImageFolder
-from compressai.losses import RateDistortionLoss
+from compressai.losses import RateDistortionLoss, UncertaintyGatedRateDistortionLoss
 from compressai.optimizers import net_aux_optimizer
 from compressai.zoo import image_models
 
@@ -107,6 +107,14 @@ def train_one_epoch(
         aux_optimizer.step()
 
         if i % 10 == 0:
+            extras = []
+            if "decouple_loss" in out_criterion:
+                extras.append(
+                    f"Decouple: {out_criterion['decouple_loss'].item():.2f}"
+                )
+            if "mask_ratio" in out_criterion:
+                extras.append(f"Mask: {out_criterion['mask_ratio'].item():.2f}")
+            extra_msg = f" | {' | '.join(extras)}" if extras else ""
             print(
                 f"Train epoch {epoch}: ["
                 f"{i*len(d)}/{len(train_dataloader.dataset)}"
@@ -114,7 +122,7 @@ def train_one_epoch(
                 f'\tLoss: {out_criterion["loss"].item():.3f} |'
                 f'\tMSE loss: {out_criterion["mse_loss"].item():.3f} |'
                 f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
-                f"\tAux loss: {aux_loss.item():.2f}"
+                f"\tAux loss: {aux_loss.item():.2f}" + extra_msg
             )
 
 
@@ -126,6 +134,10 @@ def test_epoch(epoch, test_dataloader, model, criterion):
     bpp_loss = AverageMeter()
     mse_loss = AverageMeter()
     aux_loss = AverageMeter()
+    decouple_loss = AverageMeter()
+    mask_ratio = AverageMeter()
+    track_decouple = False
+    track_mask = False
 
     with torch.no_grad():
         for d in test_dataloader:
@@ -137,13 +149,25 @@ def test_epoch(epoch, test_dataloader, model, criterion):
             bpp_loss.update(out_criterion["bpp_loss"])
             loss.update(out_criterion["loss"])
             mse_loss.update(out_criterion["mse_loss"])
+            if "decouple_loss" in out_criterion:
+                decouple_loss.update(out_criterion["decouple_loss"].item())
+                track_decouple = True
+            if "mask_ratio" in out_criterion:
+                mask_ratio.update(out_criterion["mask_ratio"].item())
+                track_mask = True
+
+    extra = ""
+    if track_decouple:
+        extra += f" | Decouple: {decouple_loss.avg:.2f}"
+    if track_mask:
+        extra += f" | Mask: {mask_ratio.avg:.2f}"
 
     print(
         f"Test epoch {epoch}: Average losses:"
         f"\tLoss: {loss.avg:.3f} |"
         f"\tMSE loss: {mse_loss.avg:.3f} |"
         f"\tBpp loss: {bpp_loss.avg:.2f} |"
-        f"\tAux loss: {aux_loss.avg:.2f}\n"
+        f"\tAux loss: {aux_loss.avg:.2f}{extra}\n"
     )
 
     return loss.avg
@@ -194,6 +218,42 @@ def parse_args(argv):
         type=float,
         default=1e-2,
         help="Bit-rate distortion parameter (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=1.0,
+        help="Decouple regularization weight for UG-VI models (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--keep-ratio",
+        type=float,
+        default=1.0,
+        help="Fraction of latent channels transmitted by UG-VI models (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--temperature-init",
+        type=float,
+        default=1.0,
+        help="Initial temperature for UG-VI gating (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--temperature-min",
+        type=float,
+        default=0.05,
+        help="Minimum temperature for UG-VI gating (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--temperature-decay",
+        type=float,
+        default=0.998,
+        help="Multiplicative decay applied to UG-VI temperature (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--prior-seed",
+        type=int,
+        default=0,
+        help="Seed used to synthesize masked latents during evaluation (default: %(default)s)",
     )
     parser.add_argument(
         "--batch-size", type=int, default=16, help="Batch size (default: %(default)s)"
@@ -269,7 +329,19 @@ def main(argv):
         pin_memory=(device == "cuda"),
     )
 
-    net = image_models[args.model](quality=3)
+    model_kwargs = {}
+    if args.model == "usc-mbt2018-mean":
+        model_kwargs.update(
+            {
+                "keep_ratio": args.keep_ratio,
+                "temperature_init": args.temperature_init,
+                "temperature_min": args.temperature_min,
+                "temperature_decay": args.temperature_decay,
+                "prior_seed": args.prior_seed,
+            }
+        )
+
+    net = image_models[args.model](quality=3, **model_kwargs)
     net = net.to(device)
 
     if args.cuda and torch.cuda.device_count() > 1:
@@ -277,7 +349,12 @@ def main(argv):
 
     optimizer, aux_optimizer = configure_optimizers(net, args)
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
-    criterion = RateDistortionLoss(lmbda=args.lmbda)
+    if args.model == "usc-mbt2018-mean":
+        criterion = UncertaintyGatedRateDistortionLoss(
+            lmbda=args.lmbda, gamma=args.gamma
+        )
+    else:
+        criterion = RateDistortionLoss(lmbda=args.lmbda)
 
     last_epoch = 0
     if args.checkpoint:  # load from previous checkpoint

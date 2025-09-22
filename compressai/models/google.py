@@ -27,6 +27,7 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import math
 import warnings
 
 import torch
@@ -53,6 +54,7 @@ __all__ = [
     "FactorizedPriorReLU",
     "ScaleHyperprior",
     "MeanScaleHyperprior",
+    "UncertaintyGatedMeanScaleHyperprior",
     "JointAutoregressiveHierarchicalPriors",
     "get_scale_table",
     "SCALES_MIN",
@@ -427,6 +429,143 @@ class MeanScaleHyperprior(ScaleHyperprior):
             strings[0], indexes, means=means_hat
         )
         x_hat = self.g_s(y_hat).clamp_(0, 1)
+        return {"x_hat": x_hat}
+
+
+@register_model("usc-mbt2018-mean")
+class UncertaintyGatedMeanScaleHyperprior(MeanScaleHyperprior):
+    """Mean-scale hyperprior augmented with uncertainty-gated USC mechanism."""
+
+    def __init__(
+        self,
+        N=192,
+        M=192,
+        keep_ratio: float = 1.0,
+        temperature_init: float = 1.0,
+        temperature_min: float = 0.05,
+        temperature_decay: float = 0.998,
+        prior_seed: int = 0,
+        **kwargs,
+    ) -> None:
+        super().__init__(N=N, M=M, **kwargs)
+
+        if not 0.0 <= keep_ratio <= 1.0:
+            raise ValueError("keep_ratio must be in [0, 1]")
+
+        self.keep_ratio = float(keep_ratio)
+        self.temperature_decay = float(temperature_decay)
+        self.temperature_min = float(temperature_min)
+        self.register_buffer("temperature", torch.tensor(float(temperature_init)))
+        self._prior_seed = int(prior_seed)
+
+    def set_keep_ratio(self, keep_ratio: float) -> None:
+        if not 0.0 <= keep_ratio <= 1.0:
+            raise ValueError("keep_ratio must be in [0, 1]")
+        self.keep_ratio = float(keep_ratio)
+
+    def _current_temperature(self, device, dtype):
+        temp = float(self.temperature.item())
+        if self.training:
+            temp = max(self.temperature_min, temp * self.temperature_decay)
+            self.temperature.fill_(temp)
+        else:
+            temp = max(self.temperature_min, temp)
+        return torch.tensor(temp, device=device, dtype=dtype)
+
+    def _compute_gating(self, sigma):
+        ratio = self.keep_ratio
+        sigma_detached = sigma.detach()
+        flat = sigma_detached.reshape(sigma_detached.size(0), -1)
+
+        if ratio <= 0.0:
+            tau = flat.min(dim=1, keepdim=True)[0]
+            mask_hard = torch.zeros_like(sigma_detached)
+        elif ratio >= 1.0:
+            tau = flat.max(dim=1, keepdim=True)[0]
+            mask_hard = torch.ones_like(sigma_detached)
+        else:
+            kth = max(1, int(math.ceil(ratio * flat.size(1))))
+            tau = flat.kthvalue(kth, dim=1, keepdim=True).values
+            mask_hard = (sigma_detached <= tau.view(-1, 1, 1, 1)).to(
+                sigma_detached.dtype
+            )
+
+        tau = tau.view(-1, 1, 1, 1).to(sigma.dtype)
+        mask_hard = mask_hard.to(sigma.dtype)
+
+        temperature = self._current_temperature(sigma.device, sigma.dtype)
+        logits = -(sigma - tau) / temperature
+        mask_soft = torch.sigmoid(logits)
+        mask_ste = mask_hard + (mask_soft - mask_soft.detach())
+
+        return mask_hard, mask_ste, tau
+
+    def _sample_from_prior(self, scales, means, deterministic=False):
+        scales = self.gaussian_conditional.lower_bound_scale(scales)
+        if deterministic:
+            generator = torch.Generator(device=scales.device)
+            generator.manual_seed(self._prior_seed)
+            noise = torch.randn_like(scales, generator=generator)
+        else:
+            noise = torch.randn_like(scales)
+        return means + scales * noise
+
+    def forward(self, x):
+        y = self.g_a(x)
+        z = self.h_a(y)
+        z_hat, z_likelihoods = self.entropy_bottleneck(z)
+        gaussian_params = self.h_s(z_hat)
+        scales_hat, means_hat = gaussian_params.chunk(2, 1)
+
+        mask_hard, mask_ste, tau = self._compute_gating(scales_hat)
+        y_hat, y_likelihoods = self.gaussian_conditional(y, scales_hat, means=means_hat)
+        y_synth = self._sample_from_prior(scales_hat, means_hat)
+        y_combined = mask_ste * y_hat + (1.0 - mask_ste) * y_synth
+        x_hat = self.g_s(y_combined)
+
+        kl_bits_y = -torch.log(y_likelihoods + 1e-9) / math.log(2.0)
+
+        return {
+            "x_hat": x_hat,
+            "likelihoods": {"y": y_likelihoods, "z": z_likelihoods},
+            "mask_hard": mask_hard,
+            "mask_ste": mask_ste,
+            "tau": tau,
+            "kl_bits_y": kl_bits_y,
+        }
+
+    def compress(self, x):
+        y = self.g_a(x)
+        z = self.h_a(y)
+
+        z_strings = self.entropy_bottleneck.compress(z)
+        z_hat = self.entropy_bottleneck.decompress(z_strings, z.size()[-2:])
+
+        gaussian_params = self.h_s(z_hat)
+        scales_hat, means_hat = gaussian_params.chunk(2, 1)
+        mask_hard, _, _ = self._compute_gating(scales_hat)
+
+        indexes = self.gaussian_conditional.build_indexes(scales_hat)
+        y_strings = self.gaussian_conditional.compress(y, indexes, means=means_hat)
+
+        return {
+            "strings": [y_strings, z_strings],
+            "shape": z.size()[-2:],
+            "aux": {"mask_ratio": float(mask_hard.mean().item())},
+        }
+
+    def decompress(self, strings, shape):
+        assert isinstance(strings, list) and len(strings) == 2
+        z_hat = self.entropy_bottleneck.decompress(strings[1], shape)
+        gaussian_params = self.h_s(z_hat)
+        scales_hat, means_hat = gaussian_params.chunk(2, 1)
+
+        mask_hard, _, _ = self._compute_gating(scales_hat)
+        indexes = self.gaussian_conditional.build_indexes(scales_hat)
+        y_hat = self.gaussian_conditional.decompress(strings[0], indexes, means=means_hat)
+        y_synth = self._sample_from_prior(scales_hat, means_hat, deterministic=True)
+        y_combined = mask_hard * y_hat + (1.0 - mask_hard) * y_synth
+        x_hat = self.g_s(y_combined).clamp_(0, 1)
         return {"x_hat": x_hat}
 
 

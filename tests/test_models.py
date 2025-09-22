@@ -32,6 +32,7 @@ import torch
 import torch.nn as nn
 
 from compressai.entropy_models import EntropyBottleneck
+from compressai.losses import UncertaintyGatedRateDistortionLoss
 from compressai.models.google import (
     SCALES_LEVELS,
     SCALES_MAX,
@@ -41,6 +42,7 @@ from compressai.models.google import (
     JointAutoregressiveHierarchicalPriors,
     MeanScaleHyperprior,
     ScaleHyperprior,
+    UncertaintyGatedMeanScaleHyperprior,
     get_scale_table,
 )
 from compressai.models.utils import (
@@ -154,6 +156,31 @@ class TestModels:
         assert z_likelihoods_shape[2] == x.shape[2] / 2**6
         assert z_likelihoods_shape[3] == x.shape[3] / 2**6
 
+    def test_uncertainty_gated_mean_scale_hyperprior(self):
+        model = UncertaintyGatedMeanScaleHyperprior(128, 192, keep_ratio=0.5)
+        x = torch.rand(1, 3, 64, 64)
+        out = model(x)
+
+        assert "mask_hard" in out
+        assert "mask_ste" in out
+        assert "kl_bits_y" in out
+        assert out["mask_hard"].shape == out["likelihoods"]["y"].shape
+        assert out["mask_ste"].shape == out["mask_hard"].shape
+        mask_ratio = out["mask_hard"].mean().item()
+        assert 0.0 <= mask_ratio <= 1.0
+
+        compressed = model.compress(x)
+        model.eval()
+        recon = model.decompress(compressed["strings"], compressed["shape"])
+        assert "x_hat" in recon
+        assert recon["x_hat"].shape == x.shape
+
+        model.train()
+        model.set_keep_ratio(0.0)
+        zero_out = model(torch.rand(1, 3, 64, 64))
+        assert torch.count_nonzero(zero_out["mask_hard"]).item() == 0
+
+
     def test_jarhp(self, tmpdir):
         model = JointAutoregressiveHierarchicalPriors(128, 192)
         x = torch.rand(1, 3, 64, 64)
@@ -244,6 +271,22 @@ class TestModels:
         assert z_likelihoods_shape[1] == 192
         assert z_likelihoods_shape[2] == x[1].shape[2] / 2**7  # (128x128 input)
         assert z_likelihoods_shape[3] == x[1].shape[3] / 2**7
+
+
+class TestUGVILoss:
+    def test_loss_forward(self):
+        torch.manual_seed(0)
+        model = UncertaintyGatedMeanScaleHyperprior(64, 96, keep_ratio=0.6)
+        x = torch.rand(2, 3, 32, 32)
+        target = torch.rand_like(x)
+        out = model(x)
+
+        criterion = UncertaintyGatedRateDistortionLoss(lmbda=0.01, gamma=1.5)
+        metrics = criterion(out, target)
+
+        assert "loss" in metrics
+        assert "decouple_loss" in metrics
+        assert torch.isfinite(metrics["loss"])
 
 
 def test_scale_table_default():

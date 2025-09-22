@@ -27,8 +27,9 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from .rate_distortion import RateDistortionLoss
+from .rate_distortion import RateDistortionLoss, UncertaintyGatedRateDistortionLoss
 
 __all__ = [
     "RateDistortionLoss",
+    "UncertaintyGatedRateDistortionLoss",
 ]

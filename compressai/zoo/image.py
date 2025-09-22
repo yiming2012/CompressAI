@@ -37,6 +37,7 @@ from compressai.models import (
     JointAutoregressiveHierarchicalPriors,
     MeanScaleHyperprior,
     ScaleHyperprior,
+    UncertaintyGatedMeanScaleHyperprior,
 )
 
 from .pretrained import load_pretrained
@@ -49,6 +50,7 @@ __all__ = [
     "mbt2018_mean",
     "cheng2020_anchor",
     "cheng2020_attn",
+    "usc_mbt2018_mean",
 ]
 
 model_architectures = {
@@ -59,6 +61,7 @@ model_architectures = {
     "mbt2018": JointAutoregressiveHierarchicalPriors,
     "cheng2020-anchor": Cheng2020Anchor,
     "cheng2020-attn": Cheng2020Attention,
+    "usc-mbt2018-mean": UncertaintyGatedMeanScaleHyperprior,
 }
 
 root_url = "https://compressai.s3.amazonaws.com/models/v1"
@@ -380,6 +383,14 @@ def mbt2018_mean(quality, metric="mse", pretrained=False, progress=True, **kwarg
         raise ValueError(f'Invalid quality "{quality}", should be between (1, 8)')
 
     return _load_model("mbt2018-mean", metric, quality, pretrained, progress, **kwargs)
+
+
+def usc_mbt2018_mean(quality=None, **kwargs):
+    """Instantiate the uncertainty-gated variant of MBT2018-Mean."""
+
+    defaults = {"N": 192, "M": 192}
+    defaults.update(kwargs)
+    return UncertaintyGatedMeanScaleHyperprior(**defaults)
 
 
 def mbt2018(quality, metric="mse", pretrained=False, progress=True, **kwargs):

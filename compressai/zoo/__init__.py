@@ -35,6 +35,7 @@ from .image import (
     cheng2020_attn,
     mbt2018,
     mbt2018_mean,
+    usc_mbt2018_mean,
 )
 from .pretrained import load_pretrained as load_state_dict
 from .video import ssf2020
@@ -47,6 +48,7 @@ image_models = {
     "mbt2018": mbt2018,
     "cheng2020-anchor": cheng2020_anchor,
     "cheng2020-attn": cheng2020_attn,
+    "usc-mbt2018-mean": usc_mbt2018_mean,
 }
 
 video_models = {

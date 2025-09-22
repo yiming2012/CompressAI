@@ -73,3 +73,64 @@ class RateDistortionLoss(nn.Module):
             return out
         else:
             return out[self.return_type]
+
+
+@register_criterion("UGVILoss")
+class UncertaintyGatedRateDistortionLoss(nn.Module):
+    """Rate-distortion objective for Uncertainty-Gated VI models."""
+
+    def __init__(self, lmbda=0.01, gamma=1.0, metric="mse", return_type="all"):
+        super().__init__()
+        if metric == "mse":
+            self.metric = nn.MSELoss()
+        elif metric == "ms-ssim":
+            self.metric = ms_ssim
+        else:
+            raise NotImplementedError(f"{metric} is not implemented!")
+        self.lmbda = lmbda
+        self.gamma = gamma
+        self.return_type = return_type
+
+    def forward(self, output, target):
+        if "mask_ste" not in output or "kl_bits_y" not in output:
+            raise KeyError(
+                "UGVILoss expects model outputs to provide 'mask_ste' and 'kl_bits_y'."
+            )
+
+        N, _, H, W = target.size()
+        num_pixels = N * H * W
+
+        mask = output["mask_ste"]
+        kl_bits_y = output["kl_bits_y"]
+
+        z_likelihoods = output["likelihoods"].get("z")
+        if z_likelihoods is None:
+            raise KeyError("UGVILoss expects a 'z' likelihood term.")
+
+        log_factor = -math.log(2)
+        R_z = torch.log(z_likelihoods).sum() / (log_factor * num_pixels)
+        R_y = (mask * kl_bits_y).sum() / num_pixels
+        decouple = ((1.0 - mask) * kl_bits_y).sum() / num_pixels
+
+        out = {
+            "R_z": R_z,
+            "R_y": R_y,
+            "decouple_loss": decouple,
+            "mask_ratio": mask.mean(),
+        }
+
+        out["bpp_loss"] = R_z + R_y
+
+        if self.metric == ms_ssim:
+            out["ms_ssim_loss"] = self.metric(output["x_hat"], target, data_range=1)
+            distortion = 1 - out["ms_ssim_loss"]
+        else:
+            out["mse_loss"] = self.metric(output["x_hat"], target)
+            distortion = 255**2 * out["mse_loss"]
+
+        out["distortion"] = distortion
+        out["loss"] = distortion + self.lmbda * (R_z + R_y + self.gamma * decouple)
+
+        if self.return_type == "all":
+            return out
+        return out[self.return_type]
