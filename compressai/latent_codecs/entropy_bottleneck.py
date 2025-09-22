@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2025, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,7 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from torch import Tensor
 
@@ -61,11 +61,13 @@ class EntropyBottleneckLatentCodec(LatentCodec):
 
     entropy_bottleneck: EntropyBottleneck
 
-    def __init__(self, N: int, **kwargs):
+    def __init__(
+        self,
+        entropy_bottleneck: Optional[EntropyBottleneck] = None,
+        **kwargs,
+    ):
         super().__init__()
-        self._kwargs = kwargs
-        self.N = N
-        self._setdefault("entropy_bottleneck", lambda: EntropyBottleneck(N))
+        self.entropy_bottleneck = entropy_bottleneck or EntropyBottleneck(**kwargs)
 
     def forward(self, y: Tensor) -> Dict[str, Any]:
         y_hat, y_likelihoods = self.entropy_bottleneck(y)
@@ -78,7 +80,7 @@ class EntropyBottleneckLatentCodec(LatentCodec):
         return {"strings": [y_strings], "shape": shape, "y_hat": y_hat}
 
     def decompress(
-        self, strings: List[List[bytes]], shape: Tuple[int, int]
+        self, strings: List[List[bytes]], shape: Tuple[int, int], **kwargs
     ) -> Dict[str, Any]:
         (y_strings,) = strings
         y_hat = self.entropy_bottleneck.decompress(y_strings, shape)

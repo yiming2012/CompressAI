@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2025, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -80,14 +80,14 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # html_theme = "sphinx_rtd_theme"
 html_theme = "sphinx_book_theme"
 html_title = "CompressAI"
-html_logo = "_static/logo.png"
+html_logo = "_static/logo.svg"
 html_show_sphinx = False
 html_theme_options = {
     "repository_url": "https://github.com/InterDigitalInc/CompressAI/",
     "use_repository_button": True,
     "use_fullscreen_button": False,
-    "logo_only": True,
-    "extra_navbar": "",
+    "pygment_light_style": "tango",
+    "pygment_dark_style": "dracula",
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,

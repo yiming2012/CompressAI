@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2025, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -61,7 +61,7 @@ class ImageFolder(Dataset):
         splitdir = Path(root) / split
 
         if not splitdir.is_dir():
-            raise RuntimeError(f'Invalid directory "{root}"')
+            raise RuntimeError(f'Missing directory "{splitdir}"')
 
         self.samples = sorted(f for f in splitdir.iterdir() if f.is_file())
 

@@ -1,6 +1,5 @@
-![ID-CompressAI-logo](assets/ID-compressAI-logo-750x140.png)
-
-# CompressAI
+<!-- ![ID-CompressAI-logo](assets/ID-compressAI-logo-750x140.svg =750x140) -->
+<a href="url"><img src="docs/source/_static/logo.svg" align="center"></a>
 
 [![License](https://img.shields.io/github/license/InterDigitalInc/CompressAI?color=blue)](https://github.com/InterDigitalInc/CompressAI/blob/master/LICENSE)
 [![PyPI](https://img.shields.io/pypi/v/compressai?color=brightgreen)](https://pypi.org/project/compressai/)
@@ -24,7 +23,7 @@ CompressAI currently provides:
 
 ## Installation
 
-CompressAI supports python 3.6+ and PyTorch 1.7+.
+CompressAI supports python 3.8+ and PyTorch 1.7+.
 
 **pip**:
 
@@ -51,7 +50,6 @@ pip install -U pip && pip install -e .
 For a custom installation, you can also run one of the following commands:
 * `pip install -e '.[dev]'`: install the packages required for development (testing, linting, docs)
 * `pip install -e '.[tutorials]'`: install the packages required for the tutorials (notebooks)
-* `pip install -e '.[all]'`: install all the optional packages
 
 > **Note**: Docker images will be released in the future. Conda environments are not
 officially supported.
@@ -109,7 +107,7 @@ To evaluate provided pre-trained models:
 python3 -m compressai.utils.eval_model pretrained /path/to/images/folder/ -a $ARCH -q $QUALITY_LEVELS...
 ```
 
-To plot results from bench/eval_model simulations (requires matplotlib by default): 
+To plot results from bench/eval_model simulations (requires matplotlib by default):
 
 ```bash
 python3 -m compressai.utils.plot --help
@@ -170,6 +168,17 @@ models and datasets, and cite this project as:
 	author={B{\'e}gaint, Jean and Racap{\'e}, Fabien and Feltman, Simon and Pushparaja, Akshay},
 	year={2020},
 	journal={arXiv preprint arXiv:2011.03029},
+}
+```
+
+For any work related to the variable bitrate models, please cite
+```
+@article{kamisli2024dcc_vbrlic,
+	title={Variable-Rate Learned Image Compression with Multi-Objective Optimization and Quantization-Reconstruction Offsets},
+	author={Kamisli, Fatih and Racap{\'e}, Fabien and Choi, Hyomin},
+	year={2024},
+	booktitle={2024 Data Compression Conference (DCC)},
+	eprint={2402.18930},
 }
 ```
 

@@ -31,6 +31,10 @@ CompressAI provides the following predefined :py:class:`~LatentCodec` subclasses
      - Like :py:class:`~HyperLatentCodec`, but with trainable gain vectors for ``z``.
    * - :py:class:`~GainHyperpriorLatentCodec`
      - Like :py:class:`~HyperpriorLatentCodec`, but with trainable gain vectors for ``y``.
+   * - :py:class:`~ChannelGroupsLatentCodec`
+     - Encodes ``y`` in multiple chunked groups, each group conditioned on previously encoded groups.
+   * - :py:class:`~CheckerboardLatentCodec`
+     - Encodes ``y`` in two passes in checkerboard order.
 
 
 Diagrams for some of the above predefined latent codecs:
@@ -174,7 +178,7 @@ Using :py:class:`~compressai.models.base.SimpleVAECompressionModel`, some Google
             self.g_a = nn.Sequential(...)
             self.g_s = nn.Sequential(...)
 
-            self.latent_codec = EntropyBottleneckLatentCodec(N)
+            self.latent_codec = EntropyBottleneckLatentCodec(channels=M)
 
 
 .. code-block:: python
@@ -190,13 +194,10 @@ Using :py:class:`~compressai.models.base.SimpleVAECompressionModel`, some Google
             h_s = nn.Sequential(...)
 
             self.latent_codec = HyperpriorLatentCodec(
-                N=N,
-
                 # A HyperpriorLatentCodec is made of "hyper" and "y" latent codecs.
                 latent_codec={
                     # Side-information branch with entropy bottleneck for "z":
                     "hyper": HyperLatentCodec(
-                        N,
                         h_a=h_a,
                         h_s=h_s,
                         entropy_bottleneck=EntropyBottleneck(N),
@@ -220,19 +221,17 @@ Using :py:class:`~compressai.models.base.SimpleVAECompressionModel`, some Google
             h_s = nn.Sequential(...)
 
             self.latent_codec = HyperpriorLatentCodec(
-                N=N,
-
                 # A HyperpriorLatentCodec is made of "hyper" and "y" latent codecs.
                 latent_codec={
                     # Side-information branch with entropy bottleneck for "z":
                     "hyper": HyperLatentCodec(
-                        N,
                         h_a=h_a,
                         h_s=h_s,
                         entropy_bottleneck=EntropyBottleneck(N),
                     ),
                     # Encode y using autoregression in raster-scan order:
                     "y": RasterScanLatentCodec(
+                        gaussian_conditional=GaussianConditional(None),
                         entropy_parameters=nn.Sequential(...),
                         context_prediction=MaskedConv2d(
                             M, M * 2, kernel_size=5, padding=2, stride=1
@@ -251,7 +250,7 @@ Latent codecs should inherit from the abstract base class :py:class:`~LatentCode
 
 .. code-block:: python
 
-    class LatentCodec(nn.Module, _SetDefaultMixin):
+    class LatentCodec(nn.Module):
         def forward(self, y: Tensor, *args, **kwargs) -> Dict[str, Any]:
             raise NotImplementedError
 
@@ -334,4 +333,14 @@ GainHyperLatentCodec
 GainHyperpriorLatentCodec
 -------------------------
 .. autoclass:: GainHyperpriorLatentCodec
+
+
+ChannelGroupsLatentCodec
+------------------------
+.. autoclass:: ChannelGroupsLatentCodec
+
+
+CheckerboardLatentCodec
+-----------------------
+.. autoclass:: CheckerboardLatentCodec
 

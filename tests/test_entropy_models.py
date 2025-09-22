@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2025, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -32,10 +32,13 @@ import copy
 import pytest
 import torch
 
+from packaging import version
+
 from compressai.entropy_models import (
     EntropyBottleneck,
     EntropyModel,
     GaussianConditional,
+    GaussianMixtureConditional,
 )
 from compressai.zoo import bmshj2018_factorized, bmshj2018_hyperprior
 
@@ -60,7 +63,7 @@ class TestEntropyModel:
         assert ((y - x) >= -0.5).all()
         assert (y != torch.round(x)).any()
 
-    def test__quantize(self, entropy_model):
+    def test_quantize(self, entropy_model):
         x = torch.rand(1, 3, 4, 4)
         s = torch.rand(1).item()
         torch.manual_seed(s)
@@ -241,8 +244,36 @@ class TestEntropyBottleneck:
     #     assert torch.allclose(y0[0], y1[0])
     #     assert torch.all(y1[1] == 0)  # not yet supported
 
+    @pytest.mark.skipif(
+        version.parse(torch.__version__) < version.parse("2.0.0"),
+        reason="torch.compile only available for torch>=2.0",
+    )
+    def test_compiling(self):
+        entropy_bottleneck = EntropyBottleneck(128)
+        x0 = torch.rand(1, 128, 32, 32)
+        x1 = x0.clone()
+        x0.requires_grad_(True)
+        x1.requires_grad_(True)
+
+        torch.manual_seed(32)
+        y0 = entropy_bottleneck(x0)
+
+        m = torch.compile(entropy_bottleneck)
+
+        torch.manual_seed(32)
+        y1 = m(x1)
+
+        assert torch.allclose(y0[0], y1[0])
+        assert torch.allclose(y0[1], y1[1])
+
+        y0[0].sum().backward()
+        y1[0].sum().backward()
+
+        assert torch.allclose(x0.grad, x1.grad)
+
     def test_update(self):
         # get a pretrained model
+
         net = bmshj2018_factorized(quality=1, pretrained=True).eval()
         assert not net.update()
         assert not net.update(force=False)
@@ -261,26 +292,30 @@ class TestEntropyBottleneck:
         eb.update()
         s = eb.compress(x)
         x2 = eb.decompress(s, x.size()[2:])
+        means = eb._get_medians()
 
-        assert torch.allclose(torch.round(x), x2)
+        assert torch.allclose(torch.round(x - means) + means, x2)
 
     def test_compression_ND(self):
         eb = EntropyBottleneck(128)
         eb.update()
+
         # Test 0D
         x = torch.rand(1, 128)
         s = eb.compress(x)
         x2 = eb.decompress(s, [])
+        means = eb._get_medians().reshape(128)
 
-        assert torch.allclose(torch.round(x), x2)
+        assert torch.allclose(torch.round(x - means) + means, x2)
 
         # Test from 1 to 5 dimensions
         for i in range(1, 6):
             x = torch.rand(1, 128, *([4] * i))
             s = eb.compress(x)
             x2 = eb.decompress(s, x.size()[2:])
+            means = eb._get_medians().reshape(128, *([1] * i))
 
-            assert torch.allclose(torch.round(x), x2)
+            assert torch.allclose(torch.round(x - means) + means, x2)
 
 
 class TestGaussianConditional:
@@ -396,6 +431,65 @@ class TestGaussianConditional:
         assert approx(net.gaussian_conditional._cdf_length, cdf_length)
         assert approx(net.gaussian_conditional._offset, offset)
         assert approx(net.gaussian_conditional._quantized_cdf, quantized_cdf)
+
+
+class TestGaussianMixtureConditional:
+    def test_forward_training(self):
+        K = 2
+        gaussian_mixture_conditional = GaussianMixtureConditional(K)
+        M = 128
+        x = torch.rand(1, M, 32, 32)
+        scales = torch.rand(1, 2 * M, 32, 32)
+        means = torch.rand(1, 2 * M, 32, 32)
+        weights = torch.rand(1, 2 * M, 32, 32)
+        y, y_likelihoods = gaussian_mixture_conditional(
+            inputs=x, scales=scales, means=means, weights=weights
+        )
+
+        assert isinstance(gaussian_mixture_conditional, EntropyModel)
+        assert y.shape == x.shape
+        assert y_likelihoods.shape == x.shape
+
+        assert ((y - x) <= 0.5).all()
+        assert ((y - x) >= -0.5).all()
+        assert (y != torch.round(x)).any()
+
+    def test_k_1(self):
+        gaussian_mixture_conditional = GaussianMixtureConditional(1)
+        gaussian_conditional = GaussianConditional(None)
+        M = 128
+        x = torch.rand(1, M, 32, 32)
+        scales = torch.rand(1, M, 32, 32)
+        means = torch.rand(1, M, 32, 32)
+        weights = torch.ones(1, M, 32, 32)
+        y_0, y_likelihoods_0 = gaussian_mixture_conditional(
+            inputs=x, scales=scales, means=means, weights=weights
+        )
+        y_1, y_likelihoods_1 = gaussian_conditional(
+            inputs=x, scales=scales, means=means
+        )
+
+        def approx(a, b):
+            return ((a - b).abs() <= 2).all()
+
+        assert approx(y_0, y_1)
+        assert approx(y_likelihoods_0, y_likelihoods_1)
+
+    def test_forward_inference(self):
+        K = 2
+        gaussian_mixture_conditional = GaussianMixtureConditional(K)
+        gaussian_mixture_conditional.eval()
+        M = 128
+        x = torch.rand(1, M, 32, 32)
+        scales = torch.rand(1, 2 * M, 32, 32)
+        means = torch.rand(1, 2 * M, 32, 32)
+        weights = torch.rand(1, 2 * M, 32, 32)
+        y, y_likelihoods = gaussian_mixture_conditional(x, scales, means, weights)
+
+        assert y.shape == x.shape
+        assert y_likelihoods.shape == x.shape
+
+        assert (y == torch.round(x)).all()
 
 
 @pytest.mark.parametrize(

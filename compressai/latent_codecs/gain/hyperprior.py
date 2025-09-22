@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2025, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -34,8 +34,6 @@ from torch import Tensor
 from compressai.registry import register_module
 
 from ..base import LatentCodec
-from ..gaussian_conditional import GaussianConditionalLatentCodec
-from .hyper import GainHyperLatentCodec
 
 __all__ = [
     "GainHyperpriorLatentCodec",
@@ -44,8 +42,8 @@ __all__ = [
 
 @register_module("GainHyperpriorLatentCodec")
 class GainHyperpriorLatentCodec(LatentCodec):
-    """Hyperprior codec constructed from latent codec for `y` that
-    compresses `y` using `params` from `hyper` branch.
+    """Hyperprior codec constructed from latent codec for ``y`` that
+    compresses ``y`` using ``params`` from ``hyper`` branch.
 
     Gain-controlled hyperprior introduced in
     `"Asymmetric Gained Deep Image Compression With Continuous Rate Adaptation"
@@ -90,23 +88,18 @@ class GainHyperpriorLatentCodec(LatentCodec):
                             └───┘          GC
 
     Common configurations of latent codecs include:
-     - entropy bottleneck `hyper` (default) and gaussian conditional `y` (default)
-     - entropy bottleneck `hyper` (default) and autoregressive `y`
+     - entropy bottleneck ``hyper`` (default) and gaussian conditional ``y`` (default)
+     - entropy bottleneck ``hyper`` (default) and autoregressive ``y``
     """
 
-    latent_codec: Mapping[str, LatentCodec]
-
-    def __init__(self, N: int, **kwargs):
+    def __init__(self, latent_codec: Mapping[str, LatentCodec], **kwargs):
         super().__init__()
-        self._kwargs = kwargs
-        self.N = N
-        self._set_group_defaults(
-            "latent_codec",
-            defaults={
-                "y": GaussianConditionalLatentCodec,
-                "hyper": lambda: GainHyperLatentCodec(N),
-            },
-        )
+        self.y = latent_codec["y"]
+        self.hyper = latent_codec["hyper"]
+        self.latent_codec = latent_codec
+
+    def __getitem__(self, key: str) -> LatentCodec:
+        return self.latent_codec[key]
 
     def forward(
         self,
@@ -150,6 +143,7 @@ class GainHyperpriorLatentCodec(LatentCodec):
         shape: Dict[str, Tuple[int, ...]],
         y_gain_inv: Tensor,
         z_gain_inv: Tensor,
+        **kwargs,
     ) -> Dict[str, Any]:
         *y_strings_, z_strings = strings
         assert all(len(y_strings) == len(z_strings) for y_strings in y_strings_)

@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2025, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -38,31 +38,7 @@ __all__ = [
 ]
 
 
-class _SetDefaultMixin:
-    """Convenience functions for initializing classes with defaults."""
-
-    _kwargs: Dict[str, Any]
-
-    def _setdefault(self, k, f):
-        v = self._kwargs.get(k, None) or f()
-        setattr(self, k, v)
-
-    # TODO instead of save_direct, override load_state_dict() and state_dict()
-    def _set_group_defaults(self, group_key, defaults, save_direct=False):
-        group_dict = self._kwargs.get(group_key, {})
-        for k, f in defaults.items():
-            if k in group_dict:
-                continue
-            group_dict[k] = f()
-        if save_direct:
-            for k, v in group_dict.items():
-                setattr(self, k, v)
-        else:
-            group_dict = nn.ModuleDict(group_dict)
-        setattr(self, group_key, group_dict)
-
-
-class LatentCodec(nn.Module, _SetDefaultMixin):
+class LatentCodec(nn.Module):
     def forward(self, y: Tensor, *args, **kwargs) -> Dict[str, Any]:
         raise NotImplementedError
 

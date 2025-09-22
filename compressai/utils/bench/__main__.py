@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2025, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -30,6 +30,7 @@
 Collect performance metrics of published traditional or end-to-end image
 codecs.
 """
+
 import argparse
 import json
 import multiprocessing as mp

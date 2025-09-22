@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2025, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -28,8 +28,11 @@
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from .rate_distortion import RateDistortionLoss, UncertaintyGatedRateDistortionLoss
+from . import pointcloud
+from .pointcloud import *
 
 __all__ = [
+    *pointcloud.__all__,
     "RateDistortionLoss",
     "UncertaintyGatedRateDistortionLoss",
 ]
