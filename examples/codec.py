@@ -178,9 +178,21 @@ def parse_header(header):
     )
 
 
+def _decode_shape(first_pair, fd):
+    z_h, z_w = first_pair
+    if z_h & SHAPE_FLAG_MULTI:
+        z_h &= ~SHAPE_FLAG_MULTI
+        y_h, y_w = read_uints(fd, 2)
+        shape = ((z_h, z_w), (y_h, y_w))
+    else:
+        shape = (z_h, z_w)
+    return shape
+
+
 def read_body(fd):
     lstrings = []
-    shape = read_uints(fd, 2)
+    first_pair = read_uints(fd, 2)
+    shape = _decode_shape(first_pair, fd)
     n_strings = read_uints(fd, 1)[0]
     for _ in range(n_strings):
         s = read_bytes(fd, read_uints(fd, 1)[0])
@@ -189,9 +201,30 @@ def read_body(fd):
     return lstrings, shape
 
 
+def _encode_shape(shape):
+    if isinstance(shape, torch.Size):
+        shape = tuple(shape)
+    if isinstance(shape, (tuple, list)) and shape and isinstance(shape[0], (tuple, list)):
+        z_shape = tuple(int(v) for v in shape[0])
+        y_shape = tuple(int(v) for v in shape[1])
+        return (
+            (SHAPE_FLAG_MULTI | z_shape[0]),
+            z_shape[1],
+            y_shape[0],
+            y_shape[1],
+        )
+    return tuple(int(v) for v in shape)
+
+
 def write_body(fd, shape, out_strings):
     bytes_cnt = 0
-    bytes_cnt = write_uints(fd, (shape[0], shape[1], len(out_strings)))
+    encoded_shape = _encode_shape(shape)
+    if len(encoded_shape) == 4:
+        bytes_cnt = write_uints(fd, encoded_shape[:2])
+        bytes_cnt += write_uints(fd, encoded_shape[2:])
+    else:
+        bytes_cnt = write_uints(fd, encoded_shape)
+    bytes_cnt += write_uints(fd, (len(out_strings),))
     for s in out_strings:
         bytes_cnt += write_uints(fd, (len(s[0]),))
         bytes_cnt += write_bytes(fd, s[0])
@@ -602,3 +635,4 @@ def main(argv):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
+SHAPE_FLAG_MULTI = 1 << 31

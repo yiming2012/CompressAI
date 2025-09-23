@@ -201,6 +201,7 @@ class TestModels:
         mask_ratio = out["mask_hard"].mean().item()
         assert 0.0 <= mask_ratio <= 1.0
 
+        model.update()
         compressed = model.compress(x)
         model.eval()
         recon = model.decompress(compressed["strings"], compressed["shape"])
@@ -211,6 +212,22 @@ class TestModels:
         model.set_keep_ratio(0.0)
         zero_out = model(torch.rand(1, 3, 64, 64))
         assert torch.count_nonzero(zero_out["mask_hard"]).item() == 0
+
+    def test_uncertainty_gated_scale_stabilization(self):
+        model = UncertaintyGatedMeanScaleHyperprior(128, 192, keep_ratio=0.5)
+        huge_scales = torch.full((1, 192, 4, 4), 1e12)
+        clamped = model._stabilize_scales(huge_scales)
+        assert torch.isfinite(clamped).all()
+        assert clamped.max().item() <= model.scale_upper_bound.item() + 1e-6
+
+        means = torch.zeros_like(clamped)
+        samples = model._sample_from_prior(clamped, means)
+        assert torch.isfinite(samples).all()
+
+        mask_hard, mask_ste, tau = model._compute_gating(clamped)
+        assert torch.isfinite(mask_hard).all()
+        assert torch.isfinite(mask_ste).all()
+        assert torch.isfinite(tau).all()
 
 
     def test_jarhp(self, tmpdir):

@@ -88,6 +88,23 @@ class TestCompressDecompress:
         assert 35 < psnr < 41
 
 
+def test_write_read_body_multi_shape(tmp_path):
+    from examples.codec import read_body, write_body
+
+    shape = ((3, 5), (6, 10))
+    strings = [[b"foo"], [b"bar"]]
+    bin_path = tmp_path / "shape.bin"
+
+    with bin_path.open("wb") as f:
+        write_body(f, shape, strings)
+
+    with bin_path.open("rb") as f:
+        decoded_strings, decoded_shape = read_body(f)
+
+    assert decoded_shape == shape
+    assert decoded_strings == strings
+
+
 class TestCodecExample:
     @pytest.mark.skip(reason="find a better way to test this")
     @pytest.mark.parametrize("model", ("bmshj2018-factorized",))

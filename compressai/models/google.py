@@ -457,6 +457,9 @@ class UncertaintyGatedMeanScaleHyperprior(MeanScaleHyperprior):
         self.temperature_min = float(temperature_min)
         self.register_buffer("temperature", torch.tensor(float(temperature_init)))
         self._prior_seed = int(prior_seed)
+        self.register_buffer(
+            "scale_upper_bound", torch.tensor(float(SCALES_MAX))
+        )
 
     def set_keep_ratio(self, keep_ratio: float) -> None:
         if not 0.0 <= keep_ratio <= 1.0:
@@ -500,12 +503,38 @@ class UncertaintyGatedMeanScaleHyperprior(MeanScaleHyperprior):
 
         return mask_hard, mask_ste, tau
 
+    def _stabilize_scales(self, scales):
+        upper = self.scale_upper_bound.to(scales.device, scales.dtype)
+        return torch.clamp(scales, max=upper)
+
+    def _resize_gaussian_params(self, scales, means, reference):
+        if reference is None:
+            return scales, means
+
+        if isinstance(reference, torch.Tensor):
+            target_hw = reference.shape[-2:]
+        else:
+            target_hw = tuple(reference)
+
+        if (scales.size(-2), scales.size(-1)) == target_hw:
+            return scales, means
+
+        scales = F.interpolate(scales, size=target_hw, mode="bilinear", align_corners=False)
+        means = F.interpolate(means, size=target_hw, mode="bilinear", align_corners=False)
+        return scales, means
+
     def _sample_from_prior(self, scales, means, deterministic=False):
         scales = self.gaussian_conditional.lower_bound_scale(scales)
         if deterministic:
             generator = torch.Generator(device=scales.device)
             generator.manual_seed(self._prior_seed)
-            noise = torch.randn_like(scales, generator=generator)
+            noise = torch.randn(
+                scales.size(),
+                dtype=scales.dtype,
+                device=scales.device,
+                generator=generator,
+            )
+            noise = noise.view_as(scales)
         else:
             noise = torch.randn_like(scales)
         return means + scales * noise
@@ -516,11 +545,17 @@ class UncertaintyGatedMeanScaleHyperprior(MeanScaleHyperprior):
         z_hat, z_likelihoods = self.entropy_bottleneck(z)
         gaussian_params = self.h_s(z_hat)
         scales_hat, means_hat = gaussian_params.chunk(2, 1)
+        scales_hat = self._stabilize_scales(scales_hat)
+        scales_hat, means_hat = self._resize_gaussian_params(scales_hat, means_hat, y)
 
         mask_hard, mask_ste, tau = self._compute_gating(scales_hat)
         y_hat, y_likelihoods = self.gaussian_conditional(y, scales_hat, means=means_hat)
         y_synth = self._sample_from_prior(scales_hat, means_hat)
         y_combined = mask_ste * y_hat + (1.0 - mask_ste) * y_synth
+        if not torch.isfinite(y_combined).all():
+            raise RuntimeError(
+                "UncertaintyGatedMeanScaleHyperprior produced non-finite latents"
+            )
         x_hat = self.g_s(y_combined)
 
         kl_bits_y = -torch.log(y_likelihoods + 1e-9) / math.log(2.0)
@@ -543,6 +578,8 @@ class UncertaintyGatedMeanScaleHyperprior(MeanScaleHyperprior):
 
         gaussian_params = self.h_s(z_hat)
         scales_hat, means_hat = gaussian_params.chunk(2, 1)
+        scales_hat = self._stabilize_scales(scales_hat)
+        scales_hat, means_hat = self._resize_gaussian_params(scales_hat, means_hat, y)
         mask_hard, _, _ = self._compute_gating(scales_hat)
 
         indexes = self.gaussian_conditional.build_indexes(scales_hat)
@@ -550,21 +587,38 @@ class UncertaintyGatedMeanScaleHyperprior(MeanScaleHyperprior):
 
         return {
             "strings": [y_strings, z_strings],
-            "shape": z.size()[-2:],
-            "aux": {"mask_ratio": float(mask_hard.mean().item())},
+            "shape": (z.size()[-2:], y.size()[-2:]),
+            "aux": {
+                "mask_ratio": float(mask_hard.mean().item()),
+            },
         }
 
     def decompress(self, strings, shape):
         assert isinstance(strings, list) and len(strings) == 2
-        z_hat = self.entropy_bottleneck.decompress(strings[1], shape)
+        if isinstance(shape, (tuple, list)) and len(shape) == 2 and all(
+            isinstance(elem, (tuple, list)) for elem in shape
+        ):
+            z_shape = tuple(shape[0])
+            y_shape = tuple(shape[1])
+        else:
+            z_shape = shape
+            y_shape = None
+
+        z_hat = self.entropy_bottleneck.decompress(strings[1], z_shape)
         gaussian_params = self.h_s(z_hat)
         scales_hat, means_hat = gaussian_params.chunk(2, 1)
+        scales_hat = self._stabilize_scales(scales_hat)
+        scales_hat, means_hat = self._resize_gaussian_params(scales_hat, means_hat, y_shape)
 
         mask_hard, _, _ = self._compute_gating(scales_hat)
         indexes = self.gaussian_conditional.build_indexes(scales_hat)
         y_hat = self.gaussian_conditional.decompress(strings[0], indexes, means=means_hat)
         y_synth = self._sample_from_prior(scales_hat, means_hat, deterministic=True)
         y_combined = mask_hard * y_hat + (1.0 - mask_hard) * y_synth
+        if not torch.isfinite(y_combined).all():
+            raise RuntimeError(
+                "UncertaintyGatedMeanScaleHyperprior produced non-finite latents"
+            )
         x_hat = self.g_s(y_combined).clamp_(0, 1)
         return {"x_hat": x_hat}
 

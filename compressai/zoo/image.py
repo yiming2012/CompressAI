@@ -233,6 +233,16 @@ cfgs = {
         7: (192, 320),
         8: (192, 320),
     },
+    "usc-mbt2018-mean": {
+        1: (128, 192),
+        2: (128, 192),
+        3: (128, 192),
+        4: (128, 192),
+        5: (192, 320),
+        6: (192, 320),
+        7: (192, 320),
+        8: (192, 320),
+    },
     "mbt2018": {
         1: (192, 192),
         2: (192, 192),
@@ -388,7 +398,14 @@ def mbt2018_mean(quality, metric="mse", pretrained=False, progress=True, **kwarg
 def usc_mbt2018_mean(quality=None, **kwargs):
     """Instantiate the uncertainty-gated variant of MBT2018-Mean."""
 
-    defaults = {"N": 192, "M": 192}
+    defaults = {}
+    if quality is None:
+        defaults.update({"N": 192, "M": 192})
+    else:
+        if quality < 1 or quality > 8:
+            raise ValueError(f'Invalid quality "{quality}", should be between (1, 8)')
+        N, M = cfgs["usc-mbt2018-mean"][quality]
+        defaults.update({"N": N, "M": M})
     defaults.update(kwargs)
     return UncertaintyGatedMeanScaleHyperprior(**defaults)
 
